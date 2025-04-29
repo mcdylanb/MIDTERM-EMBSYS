@@ -292,3 +292,270 @@ void main(void)
 }
 
 ```
+
+# USART
+- not a communication protocol like SPI and I2C but a physical circuit
+
+## Synchronous
+- requires sender and receiver share a clock
+- more efficient as only data bits are transmitted
+- can be more costly due to extra wiring and circuts are required
+
+## Asynchronous
+- data can be transmitted without sender having to send a clock signalto the receiver
+- sender and receiver agree on timing parameters in advance and special bits
+- LSB are sent first
+- transmitter may add a parity bit
+
+### Example USART Asynchronous Tranmission Transmit
+```c
+void main(void)
+{
+    SPBRG = 0x19; // 9.6K baud rate @ FOSC=4MHz high speed
+    // (see formula in Table 10-1)
+    SYNC = 0; // asynchronous mode (TXSTA reg)
+    TX9 = 0; // 8-bit transmission (TXSTA reg)
+    TXEN = 1; // transmit enable (TXSTA reg)
+    BRGH = 1; // asynchronous high speed
+    SPEN = 1; // enable serial port (RCSTA reg)
+    for(;;) // foreground routine
+    {
+        while(!TRMT); // wait until TSR buffer is empty
+        TXREG = ‘A’; // send character ASCII code of ‘A’
+    }
+}
+
+```
+
+### Example Asynchronous Mode (Receive)
+```c
+void main(void)
+{
+    SPBRG = 0x19; // 9.6K baud rate @ FOSC=4MHz high speed
+    // (see formula in Table 10-1)
+    SYNC = 0; // asynchronous mode (TXSTA reg)
+    BRGH = 1; // asynchronous high speed
+    SPEN = 1; // enable serial port (RCSTA reg)
+    CREN = 1; // enable continuous receive (RCSTA reg)
+    RX9 = 0; // 8-bit reception (RCSTA reg)
+    TRISB = 0x00; // set all ports in PORTB to output
+    PORTB = 0x00; // initial value of PORTB
+    for(;;) // foreground routine
+    {
+        while(!RCIF); // what until the data receive is complete
+        PORTB = RCREG; // read RCREG
+    }
+}
+```
+
+
+# I2C
+
+### Example Initialization Master Mode
+```c
+/* I2C initialization sequence*/
+void init_I2C_Master(void)
+{
+TRISC3 = 1; // set RC3 (SCL) to input
+TRISC4 = 1; // set RC4 (SDA) to input
+SSPCON = 0x28; // SSP enabled, I2C master mode
+SSPCON2 = 0x00; // start condition idle, stop condition idle
+// receive idle
+SSPSTAT = 0x00; // slew rate enabled
+SSPADD = 0x09; // clock frequency at 100 KHz (FOSC = 4MHz)
+}
+```
+### i2c wait
+```c
+void I2C_Wait(void)
+{
+/* wait until all I2C operations are finished*/
+while((SSPCON2 & 0x1F) || (SSPSTAT & 0x04));
+}
+```
+
+### Start and Stop Conditions
+```c
+void I2C_Start(void)
+{
+/* wait until all I2C operations are finished*/
+I2C_Wait();
+/* enable start condition */
+SEN = 1; // SSPCON2
+}
+void I2C_RepeatedStart(void)
+{
+/* wait until all I2C operations are finished*/
+I2C_Wait();
+/* enable repeated start condition */
+RSEN = 1; // SSPCON2
+}
+void I2C_Stop(void)
+{
+/* wait until all I2C operations are finished*/
+I2C_Wait();
+/* enable stop condition */
+PEN = 1; // SSPCON2
+}
+```
+
+### Transmit Master Mode
+
+```c
+void I2C_Send(unsigned char data)
+{
+/* wait until all I2C operations are finished*/
+I2C_Wait();
+/* write data to buffer and transmit */
+SSPBUF = data;
+}
+```
+
+### Receive Master Mode
+```c
+unsigned char I2C_Receive(unsigned char ack)
+{
+unsigned char temp;
+I2C_Wait(); // wait until all I2C operations are finished
+RCEN = 1; // enable receive (SSPCON2 reg)
+I2C_Wait(); // wait until all I2C operations are finished
+temp = SSPBUF; // read SSP buffer
+I2C_Wait(); // wait until all I2C operations are finished
+ACKDT = (ack)?0:1; // set ACK or NACK
+ACKEN = 1; // enable acknowledge sequence
+return temp;
+}
+```
+
+
+### Send Receive Example master mode
+```c 
+void main(void)
+{
+TRISB = 0x00; // set all bits in PORTB to output
+PORTB = 0x00; // set all LEDs to off
+TRISD = 0xFF; // set all bits in PORTD to input
+init_I2C_Master(); // initialize I2C as master
+for(;;)
+{
+I2C_Start(); // initiate start condition
+I2C_Send(0x10); // send the slave address + write
+// for error handling, check if slave sent ACK bit via ACKSTAT bit
+// in SSPCON2 (for an address match)
+I2C_Send(PORTD); // send 8-bit data frame
+I2C_Stop(); // initiate stop condition
+__delay_ms(200); // delay before next operation
+I2C_Start(); // initiate start condition
+I2C_Send(0x11); // send the slave address + read
+// for error handling, check if slave sent ACK bit via ACKSTAT bit
+// in SSPCON2 (for an address match)
+PORTB = I2C_Receive(0); // read data and not acknowledge (NACK)
+// end of read operation
+// write received data to PORTB
+I2C_Stop(); // initiate stop condition
+__delay_ms(200); // delay before next operation
+}
+}
+```
+
+
+### Initilization (Slave Mode)
+```c
+/* I2C initialization sequence*/
+void init_I2C_Slave(unsigned char slave_add)
+{
+TRISC3 = 1; // set RC3 (SCL) to input
+TRISC4 = 1; // set RC4 (SDA) to input
+SSPCON = 0x36; // SSP enabled, CKP release clock (SCK)
+// I2C slave mode 7-bit address
+SSPCON2 = 0x01; // start condition idle, stop condition idle
+// receive idle
+SSPSTAT = 0x80; // slew rate control disabled
+SSPADD = slave_add; // 7-bit slave address
+SSPIE = 1; // enable SSP interrupt
+SSPIF = 0; // clear interrupt flag
+PEIE = 1; // enable peripheral interrupt
+GIE = 1; // enable unmasked interrupt
+}
+```
+
+### Receive interrupts Slave mode
+
+```c
+void interrupt ISR(void)
+{
+unsigned char temp;
+CKP = 0; // hold clock low (SSPCON reg)
+if(WCOL || SSPOV) // check if overflow or data collision (SSPCON reg)
+{
+temp = SSPBUF; // read SSPBUF to clear buffer
+WCOL = 0; // clear data collision flag
+SSPOV = 0; // clear overflow flag
+CKP = 1; // release clock (SSPCON reg)
+}
+/* check operation if “write” or "read" */
+if(!SSPSTATbits.D_nA && !SSPSTATbits.R_nW) // write to slave
+{
+temp = SSPBUF; // read SSPBUF to clear buffer
+while(!BF); // wait until receive is complete (SSPSTAT reg)
+/* read data from SSPBUF */
+/* data = SSPBUF; */
+CKP = 1; // release clock (SSPCON reg)
+}
+else if(!SSPSTATbits.D_nA && SSPSTATbits.R_nW) // read from slave
+{
+temp = SSPBUF; // read SSPBUF to clear buffer
+BF = 0; // clear buffer status bit (SSPSTAT reg)
+/* send data by writing to SSPBUF */
+/* SSPBUF = data; */
+CKP = 1; // release clock (SSPCON reg)
+while(BF); // wait until transmit is complete (SSPSTAT reg)
+}
+SSPIF = 0; // clear interrupt flag
+}
+```
+
+### Send Receive Example Slave Mode
+```c 
+void interrupt ISR(void)
+{
+unsigned char temp;
+CKP = 0; // hold clock low (SSPCON reg)
+if(WCOL || SSPOV) // check if overflow or data collision (SSPCON reg)
+{
+temp = SSPBUF; // read SSPBUF to clear buffer
+WCOL = 0; // clear data collision flag
+SSPOV = 0; // clear overflow flag
+CKP = 1; // release clock (SSPCON reg)
+}
+/* check operation if “write” or "read"*/
+if(!SSPSTATbits.D_nA && !SSPSTATbits.R_nW) // write to slave
+{
+temp = SSPBUF; // read SSPBUF to clear buffer
+while(!BF); // wait until receive is complete (SSPSTAT reg)
+PORTB = SSPBUF; // write data from master to PORTB
+CKP = 1; // release clock (SSPCON reg)
+}
+else if(!SSPSTATbits.D_nA && SSPSTATbits.R_nW) // read from slave
+{
+temp = SSPBUF; // read SSPBUF to clear buffer
+BF = 0; // clear buffer status bit (SSPSTAT reg)
+SSPBUF = PORTD; // send data from PORTD to master
+CKP = 1; // release clock (SSPCON reg)
+while(BF); // wait until transmit is complete (SSPSTAT reg)
+}
+SSPIF = 0; // clear interrupt flag
+}
+
+void main(void)
+{
+TRISB = 0x00; // set all bits in PORTB to output
+PORTB = 0x00; // all LEDs in PORTB are off
+TRISD = 0xFF; // set all bits in PORTD to input
+init_I2C_Slave(0x10); // initialize I2C as slave with address 0x10
+for(;;)
+{
+}
+}
+
+```
